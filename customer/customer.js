@@ -1910,6 +1910,68 @@ function closePreorderModal() {
     if (modal) modal.style.display = "none"
 }
 
+let pendingPreorderSubmit = false
+
+function openPreorderFinalConfirmModal() {
+    const summaryDiv = document.getElementById("preorderFinalSummary")
+    if (!summaryDiv) return
+    
+    let itemsSummary = Object.values(preorderSelection).map(item => {
+        const sizeText = item.size ? ` (${item.size})` : ''
+        return `<div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                  <span style="font-weight:500;">${item.qty}x ${item.name}${sizeText}</span>
+                  <span style="font-weight:600; color:#74512D;">PHP ${(Number(item.price) * item.qty).toFixed(2)}</span>
+                </div>`
+    }).join('')
+    
+    const dateInput = document.getElementById("custDate")
+    const timeInput = document.getElementById("custTime")
+    const dateText = dateInput?.value || ''
+    const timeText = timeInput?.value || ''
+    
+    const total = Object.values(preorderSelection).reduce((sum, i) => sum + (Number(i.price) * i.qty), 0)
+    
+    summaryDiv.innerHTML = `
+        <h4 style="color:#543310; margin-top:0; margin-bottom:12px;">Order Summary</h4>
+        <div style="margin-bottom:16px; border:1px solid #AF8F6F; border-radius:8px; padding:12px;">
+          ${itemsSummary}
+          <div style="border-top:1px dashed #AF8F6F; margin-top:12px; padding-top:12px;">
+            <div style="display:flex; justify-content:space-between; font-size:1.1rem; font-weight:700;">
+              <span style="color:#543310;">Total:</span>
+              <span style="color:#74512D;">PHP ${total.toFixed(2)}</span>
+            </div>
+          </div>
+        </div>
+        ${dateText ? `<div style="margin-bottom:8px;"><strong>Pickup Date:</strong> ${dateText}</div>` : ''}
+        ${timeText ? `<div style="margin-bottom:8px;"><strong>Pickup Time:</strong> ${timeText}</div>` : ''}
+        <div style="margin-top:12px;"><strong>Payment Method:</strong> ${preorderPaymentMethod === 'cash' ? 'Cash' : 'Online'}</div>
+    `
+    
+    const modal = document.getElementById("preorderFinalConfirmModal")
+    if (modal) modal.style.display = "flex"
+}
+
+window.closePreorderFinalConfirmModal = function() {
+    const modal = document.getElementById("preorderFinalConfirmModal")
+    if (modal) modal.style.display = "none"
+}
+
+window.openLimitedTransactionsModal = function() {
+    const modal = document.getElementById("limitedTransactionsModal")
+    if (modal) modal.style.display = "flex"
+}
+
+window.closeLimitedTransactionsModal = function() {
+    const modal = document.getElementById("limitedTransactionsModal")
+    if (modal) modal.style.display = "none"
+}
+
+window.confirmFinalPreorder = function() {
+    pendingPreorderSubmit = true
+    window.closePreorderFinalConfirmModal()
+    submitBooking()
+}
+
 document.getElementById("bookType")?.addEventListener("change", updateBookingUI)
 
 
@@ -2568,30 +2630,48 @@ function submitBooking() {
       const snapshot = userRes.data || []
       
       // Limit checks per user request:
-      // 1. Max 3 active pre-orders per customer (total)
-      // 2. Max 2 active bookings per customer (per day)
-      // "Active" means status is 'pending' or 'accepted'.
+      // 1. Max 1 active pre-order per customer
+      // 2. Max 1 active booking per customer
+      // 3. Max 2 active kiosk orders per customer
+      // "Active" means status is not 'completed', 'rejected', or 'cancelled'.
       
       let activePreorders = 0
-      let activeBookingsToday = 0
+      let activeBookings = 0
 
       snapshot.forEach(b => {
-          if (b.status === 'pending' || b.status === 'accepted') {
+          if (b.status !== 'completed' && b.status !== 'rejected' && b.status !== 'cancelled') {
               if (b.type === 'preorder') {
                   activePreorders++
-              }
-              if ((b.type === 'visit' || b.type === 'book') && b.date === date) {
-                  activeBookingsToday++
+              } else {
+                  activeBookings++
               }
           }
       })
 
-      if (type === 'preorder' && activePreorders >= 3) {
-          throw new Error("You have reached the limit of 3 active pre-orders. Please wait for your current pre-orders to be completed.")
+      if (type === 'preorder' && activePreorders >= 1) {
+          isBookingSubmitting = false
+          if (submitBtn) {
+            submitBtn.disabled = false
+            submitBtn.textContent = "Submit"
+          }
+          const processingModal = document.getElementById("processingModal");
+          if (processingModal) processingModal.style.display = "none";
+          
+          window.openLimitedTransactionsModal()
+          return
       }
-      
-      if ((type === 'visit' || type === 'book') && activeBookingsToday >= 2) {
-          throw new Error(`You already have 2 active bookings for ${date}.`)
+
+      if (type !== 'preorder' && activeBookings >= 1) {
+          isBookingSubmitting = false
+          if (submitBtn) {
+            submitBtn.disabled = false
+            submitBtn.textContent = "Submit"
+          }
+          const processingModal = document.getElementById("processingModal");
+          if (processingModal) processingModal.style.display = "none";
+          
+          window.openLimitedTransactionsModal()
+          return
       }
       
       const now = new Date().toISOString()
@@ -2771,6 +2851,7 @@ window.filterPreorderCategory = filterPreorderCategory
 window.searchPreorderMenu = searchPreorderMenu
 window.renderPreorderMenu = renderPreorderMenu
 window.updatePreorderSummary = updatePreorderSummary
+window.openPreorderFinalConfirmModal = openPreorderFinalConfirmModal
 window.viewLoyaltyHistory = viewLoyaltyHistory
 window.showPage = showPage
 window.registerCustomer = registerCustomer
@@ -3345,65 +3426,13 @@ function loadMenu() {
 function loadMenuFallback(reason = "Fallback menu") {
   const menuList = document.getElementById("menuList")
   if (menuList) {
-    menuList.innerHTML = `<p style="grid-column: 1/-1; padding: 50px; font-size: 18px; text-align:center; color:#fff;">Loading offline menu...</p>`
+    menuList.innerHTML = `<p style="grid-column: 1/-1; padding: 50px; font-size: 18px; text-align:center; color:#fff;">No menu items available. ${reason}</p>`
   }
-
-  fetch("../menu.json", { cache: "no-store" })
-    .then((res) => {
-      if (!res.ok) throw new Error("Fallback menu not available")
-      return res.json()
-    })
-    .then((data) => {
-      const fallbackProducts = Array.isArray(data?.products) ? data.products : []
-      const mapped = fallbackProducts
-        .map((p) =>
-          normalizeProductRecord({
-            ...p,
-            name: p.name || p.product_name,
-            price: p.price ?? p.product_price,
-            category_id: p.category_id ?? p.categoryId ?? p.category,
-            image_url: p.image_url || p.photo || ""
-          })
-        )
-        .filter((p) => p && p.name)
-
-      if (mapped.length === 0) throw new Error("No fallback products found")
-
-      allProducts = mapped
-      groupedProducts = {}
-      mapped.forEach((p) => {
-        const catName =
-          categories[Number(p.category_id)] ||
-          p.category ||
-          p.category_name ||
-          p.categoryName ||
-          "Uncategorized"
-        if (!groupedProducts[catName]) groupedProducts[catName] = {}
-        const prodName = String(p.name || "").trim() || "Unnamed"
-        if (!groupedProducts[catName][prodName]) groupedProducts[catName][prodName] = []
-        groupedProducts[catName][prodName].push(p)
-      })
-
-      renderMenu("All")
-      if (typeof renderPreorderMenu === "function") {
-        renderPreorderMenu(currentPreorderCategory)
-      }
-      if (window.__customerCurrentPage === "spin" && typeof updateWheel === "function") {
-        updateWheel()
-      }
-    })
-    .catch((err) => {
-      console.error("[v0] Fallback menu failed:", err)
-      if (menuList) {
-        menuList.innerHTML =
-          `<p style="grid-column: 1/-1; padding: 50px; font-size: 18px; text-align:center; color:#fff;">No menu items available. ${reason}</p>`
-      }
-      const preorderList = document.getElementById("preorderMenuGrid")
-      if (preorderList) preorderList.innerHTML = `<p style="text-align:center; color:red;">No menu items available.</p>`
-      if (window.__customerCurrentPage === "spin" && typeof setWheelStatus === "function") {
-        setWheelStatus("Menu unavailable", "Please try again later.", true)
-      }
-    })
+  const preorderList = document.getElementById("preorderMenuGrid")
+  if (preorderList) preorderList.innerHTML = `<p style="text-align:center; color:red;">No menu items available.</p>`
+  if (window.__customerCurrentPage === "spin" && typeof setWheelStatus === "function") {
+    setWheelStatus("Menu unavailable", "Please try again later.", true)
+  }
 }
 
 window.searchMenu = (query) => {
@@ -4116,6 +4145,50 @@ async function placeKioskOrder(paymentDetails = {}) {
     return
   }
   
+  // Check active kiosk order limit (max 2)
+  try {
+    const customerId = currentCustomer?.contact || currentCustomer?.email
+    let pendingQuery = db.from("pending_orders")
+      .select("*")
+      .neq("type", "redemption")
+      .in("status", ["pending", "ACCEPTED", "INSUFFICIENT", "preparing", "ready", "accepted", "insufficient", "for_pickup"])
+    
+    const buildIdentityFilter = (query) => {
+      if (!customerId) return query
+      const e = String(customerId).replace(/'/g, "''")
+      return query.or(`customer_id.eq."${e}",customer_id.ilike."%${e}%"`)
+    }
+    pendingQuery = buildIdentityFilter(pendingQuery)
+    
+    const { data: pendingOrders, error: pendingError } = await pendingQuery
+    if (pendingError) throw pendingError
+    
+    const activeKioskOrders = (pendingOrders || []).filter(order => 
+      order.type === "kiosk" && 
+      order.status !== "completed" && 
+      order.status !== "rejected" && 
+      order.status !== "cancelled"
+    )
+    
+    if (activeKioskOrders.length >= 2) {
+      isOrderSubmitting = false
+      const processingModal = document.getElementById("processingModal");
+      if (processingModal) processingModal.style.display = "none";
+      if (msg) msg.textContent = ""
+      
+      window.openLimitedTransactionsModal()
+      return
+    }
+  } catch (err) {
+    console.error("Error checking active kiosk orders:", err)
+    isOrderSubmitting = false
+    const processingModal = document.getElementById("processingModal");
+    if (processingModal) processingModal.style.display = "none";
+    
+    window.openLimitedTransactionsModal()
+    return
+  }
+  
   const items = kioskOrder.map((i) => ({
     id: i.product_id || i.id || "",
     name: i.name || "Unknown",
@@ -4285,9 +4358,6 @@ async function runTrackOrder() {
       
       if (pError) throw pError
       allPendingOrders = pData || []
-      activeOrders = allPendingOrders.filter(o => 
-          o.status !== 'completed' && o.status !== 'rejected' && o.status !== 'cancelled'
-      )
 
       // 2. Fetch history orders
       let historyQuery = db.from("orders").select("*")
@@ -4297,13 +4367,24 @@ async function runTrackOrder() {
       if (hError) throw hError
       historyOrdersData = (hData || []).filter(it => it.is_redemption !== true)
 
-      // 3. Fetch bookings
+      // 3. Fetch bookings FIRST (so we can use it for activeOrders)
       let bookingsQuery = db.from("bookings").select("*")
       bookingsQuery = buildIdentityFilter(bookingsQuery)
       const { data: bData, error: bError } = await bookingsQuery
       
       if (bError) throw bError
       bookingsData = bData || []
+      const allBookings = (bookingsData || []).map(doc => ({ ...doc }))
+
+      activeOrders = [
+        ...allPendingOrders.filter(o => 
+            o.status !== 'completed' && o.status !== 'rejected' && o.status !== 'cancelled'
+        ),
+        ...allBookings.filter(b => 
+            b.type === 'preorder' && 
+            b.status !== 'completed' && b.status !== 'rejected' && b.status !== 'cancelled'
+        )
+      ]
 
       // 4. Fetch reschedule logs if needed
       if (bookingsData.length > 0) {
@@ -4354,7 +4435,6 @@ async function runTrackOrder() {
       })
 
       // Separate active and history bookings
-      const allBookings = (bookingsData || []).map(doc => ({ ...doc }))
       const activeBookingsSection = allBookings.filter(b => ['pending', 'accepted', 'preparing', 'ready'].includes(b.status))
       const bookingHistory = allBookings.filter(b => ['completed', 'rejected', 'cancelled'].includes(b.status))
 
@@ -4385,25 +4465,26 @@ async function runTrackOrder() {
         .filter(hOrder => !activeOrders.some(aOrder => Math.abs(new Date(hOrder.timestamp).getTime() - new Date(aOrder.created_at || aOrder.timestamp).getTime()) < 2000))
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 
-      const mapOrderStatus = (status, currentlyPreparing, isPaid, hasInsufficientMarker) => {
-        if (hasInsufficientMarker) return "Pending"
+      const mapOrderStatus = (status, currentlyPreparing, isPaid, hasInsufficientMarker, paidMarker) => {
         const s = String(status || "").toLowerCase()
         if (['completed', 'complete', 'done'].includes(s)) return "Complete"
-        if (['ready', 'ready for pickup', 'ready_for_pickup'].includes(s)) return "Ready for Pickup"
-        if (currentlyPreparing || s === 'preparing' || s === 'accepted' || isPaid) return "Preparing"
-        if (s === 'pending') return "Pending"
+        if (['ready', 'for_pickup', 'for pickup'].includes(s)) return "For Pickup"
+        if (currentlyPreparing || s === 'preparing' || s === 'accepted' || paidMarker) return "Preparing"
+        if (hasInsufficientMarker) return "Preparing"
+        if (s === 'pending' || isPaid) return "In Process"
         if (s === 'rejected') return "Rejected"
         if (s === 'cancelled') return "Cancelled"
-        return "Pending"
+        return "In Process"
       }
 
       const getBadgeStyle = (displayStatus) => {
+        if (displayStatus === "In Process") return "background:#fff3e0;color:#e65100;font-weight:700;"
         if (displayStatus === "Preparing") return "background:#f3e5f5;color:#7b1fa2;font-weight:700;"
-        if (displayStatus === "Ready for Pickup") return "background:#4CAF50;color:white;"
+        if (displayStatus === "For Pickup") return "background:#4CAF50;color:white;font-weight:700;"
         if (displayStatus === "Complete") return "background:#9E9E9E;color:white;"
         if (displayStatus === "Rejected") return "background:#f44336;color:white;"
         if (displayStatus === "Cancelled") return "background:#757575;color:white;"
-        return "background:#ffeb3b;color:#333;"
+        return "background:#fff3e0;color:#e65100;font-weight:700;"
       }
 
       const renderOrderRow = (d, isHistory = false) => {
@@ -4419,13 +4500,25 @@ async function runTrackOrder() {
                 orderTotal = items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || item.qty || 1)), 0)
             }
             const insuff = resolveInsufficientInfo(d)
+            const paidMarker = /\bpayment confirmed at\b/i.test(String(d.insufficient_notes || d.notes || "")) || /\-\s*paid\b/i.test(String(d.insufficient_notes || d.notes || ""))
             const isPaid = d.paymentStatus === 'paid' || d.status === 'paid' || d.status === 'PAID'
-            const displayStatus = mapOrderStatus(d.status, d.currently_preparing, isPaid, insuff.hasMarker)
+            let displayStatus = mapOrderStatus(d.status, d.currently_preparing, isPaid, insuff.hasMarker, paidMarker)
             const badgeStyle = getBadgeStyle(displayStatus)
+            
+            // If payment is confirmed, show Preparing
+            if (paidMarker) {
+                displayStatus = "Preparing"
+            }
             
             let reasonDisplay = ""
             if (String(d.status || "").toLowerCase() === 'rejected') {
                 reasonDisplay = d.rejection_reason || d.rejectionReason || d.insufficient_notes || d.notes || (items.find(i => i.rejection_reason)?.rejection_reason) || "No reason provided"
+            } else if (insuff.hasMarker && insuff.stillNeeded > 0) {
+                displayStatus = `Preparing, pay remaining amount: \u20B1${Number(insuff.stillNeeded).toFixed(2)}`
+            } else if (insuff.hasMarker && displayStatus === "Preparing") {
+                displayStatus = `Preparing`
+            } else if (displayStatus === "For Pickup") {
+                displayStatus = `Ready for pickup`
             } else if (insuff.hasMarker) {
                 reasonDisplay = `\u26A0 Insufficient: Need \u20B1${Number(insuff.stillNeeded || d.total || 0).toFixed(2)}`
             }
@@ -4485,7 +4578,14 @@ async function runTrackOrder() {
             let rescheduleNotice = (log || d.rescheduled) ? `<div style="margin-top: 8px; padding: 8px; background: #e3f2fd; border: 1px solid #bbdefb; border-left: 4px solid #2196f3; border-radius: 4px; color: #0d47a1; font-size: 0.85em;"><strong>Notice:</strong> Your booking has been rescheduled to <b>${log ? log.new_date : d.date}</b> at <b>${log ? log.new_time : time}</b></div>` : ""
             
             const insuffStatus = resolveInsufficientInfo(d)
-            const displayStatus = mapOrderStatus(d.status, d.currently_preparing, d.paymentStatus === 'paid', insuffStatus.hasMarker)
+            let displayStatus = mapOrderStatus(d.status, d.currently_preparing, d.paymentStatus === 'paid', insuffStatus.hasMarker)
+            if (insuffStatus.hasMarker && insuffStatus.stillNeeded > 0) {
+                displayStatus = `Preparing, pay remaining amount: \u20B1${Number(insuffStatus.stillNeeded).toFixed(2)}`
+            } else if (insuffStatus.hasMarker && displayStatus === "Preparing") {
+                displayStatus = `Preparing`
+            } else if (displayStatus === "For Pickup") {
+                displayStatus = `Ready for pickup`
+            }
             const badgeStyle = getBadgeStyle(displayStatus)
 
             tr.innerHTML = `

@@ -320,7 +320,7 @@
           <button id="preorderBackBtn" onclick="showPreorderMenuView()" class="btn-secondary" style="display: none; min-width: 120px; padding: 12px 20px;">Back to Menu</button>
           <button id="preorderCancelBtn" onclick="closePreorderModal()" class="btn-secondary" style="min-width: 150px; padding: 12px 20px;">Cancel</button>
           <button id="preorderNextBtn" onclick="showPreorderPaymentView()" class="btn-preorder-submit" style="min-width: 180px; padding: 12px 20px;">Proceed to Payment</button>
-          <button id="preorderSubmitBtn" onclick="submitBooking()" class="btn-preorder-submit" style="display: none; min-width: 180px; padding: 12px 20px;">Confirm Pre-order</button>
+          <button id="preorderSubmitBtn" onclick="openPreorderFinalConfirmModal()" class="btn-preorder-submit" style="display: none; min-width: 180px; padding: 12px 20px;">Confirm Pre-order</button>
       </div>
     </div>
   </div>
@@ -601,6 +601,43 @@
       <div class="processing-spinner" style="margin: 0 auto 20px;"></div>
       <h3 id="processingModalTitle" style="margin-top:0; color: var(--coffee-dark);">Order is on process</h3>
       <p id="processingModalText" style="color: #666; line-height: 1.5;">Please wait while we handle your request...</p>
+    </div>
+  </div>
+
+  <!-- Pre-order Final Confirmation Modal -->
+  <div id="preorderFinalConfirmModal" class="auth-modal" style="display:none;">
+    <div class="auth-modal-content" style="max-width: 600px;">
+      <div class="modal-header" style="border-bottom:1px solid #AF8F6F; padding:15px 20px; display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="margin:0;">Final Confirmation</h3>
+        <button class="modal-close" onclick="closePreorderFinalConfirmModal()" style="background: none; border: none; font-size: 1.5em; cursor: pointer;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 20px;">
+        <div style="background-color: #fff3e0; padding: 12px; border-radius: 8px; border: 1px solid #ffcc80; margin-bottom: 16px;">
+          <h4 style="color: #e65100; margin-top:0; margin-bottom:8px;"><i class="fas fa-exclamation-triangle"></i> Important Warning</h4>
+          <p style="color: #5d4037; margin:0;">This pre-order/booking is final and cannot be modified or cancelled after submission.</p>
+        </div>
+        
+        <div id="preorderFinalSummary" style="margin-bottom: 16px;"></div>
+      </div>
+      <div class="modal-footer" style="padding: 15px 20px; background:#F8F4E1; border-top:1px solid #AF8F6F; display:flex; justify-content:flex-end; gap:10px;">
+        <button onclick="closePreorderFinalConfirmModal()" class="btn-secondary">Cancel</button>
+        <button onclick="confirmFinalPreorder()" class="btn-primary" style="background: #74512D; color: #F8F4E1;">Confirm Pre-order</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Limited Transactions Reached Modal -->
+  <div id="limitedTransactionsModal" class="auth-modal" style="display:none;">
+    <div class="auth-modal-content" style="max-width: 400px; text-align: center;">
+      <div class="modal-header" style="border-bottom:1px solid #AF8F6F; padding:15px 20px;">
+        <h3 style="margin:0; color: var(--coffee-dark);"><i class="fas fa-info-circle" style="color: #d32f2f; margin-right: 8px;"></i> Limited Transactions Reached</h3>
+      </div>
+      <div class="modal-body" style="padding: 25px 20px;">
+        <p style="color: #444; line-height: 1.6; margin:0;">Please complete your active transactions before placing a new order.</p>
+      </div>
+      <div class="modal-footer" style="padding: 15px 20px; background:#F8F4E1; border-top:1px solid #AF8F6F; display:flex; justify-content:center;">
+        <button onclick="closeLimitedTransactionsModal()" class="btn-primary" style="background: #74512D; color: #F8F4E1;">OK</button>
+      </div>
     </div>
   </div>
 
