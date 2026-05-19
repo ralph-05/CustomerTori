@@ -13,6 +13,33 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
   <script src="../supabase-init.js"></script>
+
+  <!-- Cafeteria time functions for customer kiosk -->
+  <script>
+    function getCurrentHourMinute() {
+      const now = new Date();
+      return {
+        hour: now.getHours(),
+        minute: now.getMinutes()
+      };
+    }
+
+    function isKioskOrderingAllowed() {
+      const { hour, minute } = getCurrentHourMinute();
+      const totalMinutes = hour * 60 + minute;
+      const openingMinutes = 8 * 60; // 8:00 AM
+      const kioskCloseMinutes = (18 * 60) + 40; // 6:40 PM (20 mins before closing)
+      return totalMinutes >= openingMinutes && totalMinutes < kioskCloseMinutes;
+    }
+
+    function getKioskCutoffTime() {
+      return "6:40 PM";
+    }
+
+    function getFormattedCafeteriaHours() {
+      return "8:00 AM - 7:00 PM";
+    }
+  </script>
 </head>
 <body>
   <!-- Dashboard Header (Matched to Provided Image) -->
@@ -461,12 +488,10 @@
           <canvas id="wheelCanvas" width="1000" height="1000"></canvas>
         </div>
         <div id="winnerBox" class="wheel-result-box-new" aria-live="polite">
-          <span class="wheel-spark">✨</span>
           <div class="wheel-result-content">
             <div id="winnerText">Ready to Spin!</div>
             <div id="winnerMeta" class="wheel-result-meta">Select categories to load items.</div>
           </div>
-          <span class="wheel-spark">✨</span>
         </div>
         
         <!-- Move Add Cart Button Bellow Winner Box -->
@@ -702,6 +727,13 @@
         <!-- Scrollable Content -->
         <div style="padding: 20px 30px; overflow-y: auto; flex: 1;">
           <div id="redeemMessage" style="margin-bottom: 15px;"></div>
+          <!-- Category Filter -->
+          <div id="redeemCategories" style="display: flex; gap: 8px; overflow-x: auto; padding: 5px 0; margin-bottom: 15px; scrollbar-width: none; -ms-overflow-style: none;">
+            <button onclick="filterRedeemCategory('Coffee', this)" style="padding: 6px 15px; font-size: 0.85rem; background: rgba(255,255,255,0.1); color: #333; border: 1px solid #ddd; border-radius: 25px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; white-space: nowrap;">☕ Coffee</button>
+            <button onclick="filterRedeemCategory('Non-coffee', this)" style="padding: 6px 15px; font-size: 0.85rem; background: rgba(255,255,255,0.1); color: #333; border: 1px solid #ddd; border-radius: 25px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; white-space: nowrap;">🥤 Non-coffee</button>
+            <button onclick="filterRedeemCategory('Frappe', this)" style="padding: 6px 15px; font-size: 0.85rem; background: rgba(255,255,255,0.1); color: #333; border: 1px solid #ddd; border-radius: 25px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; white-space: nowrap;">🍨 Frappe</button>
+            <button onclick="filterRedeemCategory('Soda', this)" style="padding: 6px 15px; font-size: 0.85rem; background: rgba(255,255,255,0.1); color: #333; border: 1px solid #ddd; border-radius: 25px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; white-space: nowrap;">Soda</button>
+          </div>
           <div id="redeemDrinkList" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 15px;">
             <!-- Drinks will be loaded here -->
           </div>
@@ -709,6 +741,17 @@
         
         <!-- Fixed Footer -->
         <div style="padding: 20px 30px; border-top: 1px solid #eee; background: #fff;">
+          <!-- Selected Order Display -->
+          <div id="selectedRedeemOrder" style="display: none; background: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+            <h4 style="margin: 0 0 10px 0; color: var(--coffee-dark);">Your Selected Order</h4>
+            <div id="selectedRedeemDetails" style="display: flex; align-items: center; gap: 10px;">
+              <img id="selectedRedeemImg" src="" alt="" style="width: 60px; height: 60px; object-fit: cover; border-radius: 8px;">
+              <div>
+                <div id="selectedRedeemName" style="font-weight: 700; color: #333;"></div>
+                <div id="selectedRedeemSize" style="color: #666; font-size: 0.9rem;"></div>
+              </div>
+            </div>
+          </div>
           <button id="confirmRedeemBtn" onclick="submitRedemption()" class="btn-primary full-width" disabled>Confirm Selection</button>
         </div>
       </div>
@@ -741,38 +784,71 @@
     <div id="trackContent" class="track-main-content">
       <div id="trackSyncStatus" style="display:none;"></div>
       
-      <div class="track-section">
-        <h3>Active Orders</h3>
+      <!-- Navigation Tabs -->
+      <div class="track-tabs-container">
+        <button class="track-tab active" data-tab="bookings" onclick="switchTrackTab('bookings')">Bookings</button>
+        <button class="track-tab" data-tab="processing" onclick="switchTrackTab('processing')">Processing</button>
+        <button class="track-tab" data-tab="toprepare" onclick="switchTrackTab('toprepare')">To Prepare</button>
+        <button class="track-tab" data-tab="topickup" onclick="switchTrackTab('topickup')">To Pick Up</button>
+        <button class="track-tab" data-tab="completed" onclick="switchTrackTab('completed')">Completed</button>
+      </div>
+      
+      <div class="track-section" id="track-bookings" style="display: none;">
+        <h3>Bookings</h3>
         <div class="table-responsive">
           <table class="track-table">
             <thead>
-              <tr><th>Qty</th><th>Product</th><th>Total</th><th>Status</th><th>Reason</th><th>Placed At</th></tr>
+              <tr><th>Type</th><th>Date</th><th>Time</th><th>Status</th><th>Placed At</th></tr>
             </thead>
-            <tbody id="trackBody"></tbody>
+            <tbody id="trackBookingsBody"></tbody>
           </table>
         </div>
       </div>
 
-      <div class="track-section">
-        <h3>Order History</h3>
+      <div class="track-section" id="track-processing" style="display: block;">
+        <h3>Processing</h3>
+        <div class="table-responsive">
+          <table class="track-table">
+            <thead>
+              <tr><th>Type</th><th>Qty</th><th>Product</th><th>Total</th><th>Status</th><th>Placed At</th></tr>
+            </thead>
+            <tbody id="trackProcessingBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="track-section" id="track-toprepare" style="display: none;">
+        <h3>To Prepare</h3>
+        <div class="table-responsive">
+          <table class="track-table">
+            <thead>
+              <tr><th>Type</th><th>Qty</th><th>Product</th><th>Placed At</th></tr>
+            </thead>
+            <tbody id="trackToPrepareBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="track-section" id="track-topickup" style="display: none;">
+        <h3>To Pick Up</h3>
+        <div class="table-responsive">
+          <table class="track-table">
+            <thead>
+              <tr><th>Type</th><th>Qty</th><th>Product</th><th>Placed At</th></tr>
+            </thead>
+            <tbody id="trackToPickupBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="track-section" id="track-completed" style="display: none;">
+        <h3>Completed</h3>
         <div class="table-responsive">
           <table class="track-table" style="opacity: 0.8;">
             <thead>
-              <tr><th>Qty</th><th>Product</th><th>Total</th><th>Status</th><th>Reason</th><th>Date</th></tr>
+              <tr><th>Type</th><th>Qty</th><th>Product</th><th>Total</th><th>Date</th></tr>
             </thead>
-            <tbody id="historyBody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="track-section">
-        <h3>Your Bookings</h3>
-        <div class="table-responsive">
-          <table class="track-table">
-            <thead>
-              <tr><th>Qty</th><th>Product</th><th>Type</th><th>Date</th><th>Time</th><th>Status</th><th>Reason</th><th>Placed At</th></tr>
-            </thead>
-            <tbody id="bookingBody"></tbody>
+            <tbody id="trackCompletedBody"></tbody>
           </table>
         </div>
       </div>
@@ -780,6 +856,21 @@
   </div>
 
   <div id="cartToast" class="cart-toast">Your order added to the cart</div>
+
+  <!-- Kiosk Blocked Modal -->
+  <div id="kioskBlockedModal" class="auth-modal" style="display:none; z-index: 10000;">
+    <div class="auth-modal-content" style="max-width: 500px; text-align: center; padding: 40px;">
+      <div style="font-size: 72px; margin-bottom: 20px;">⏰</div>
+      <h2 style="color: var(--coffee-dark); margin: 0 0 15px 0;">Self-Service Kiosk Closed</h2>
+      <p style="color: #666; font-size: 1rem; margin: 0 0 10px 0;">The self-service kiosk is currently not accepting orders.</p>
+      <p style="color: #888; font-size: 0.95rem; margin: 0 0 30px 0;">
+        Operating hours: <strong style="color: var(--coffee-dark);">8:00 AM - 6:40 PM</strong>
+        <br>
+        <small>Bookings and pre-orders are always open!</small>
+      </p>
+      <button onclick="closeKioskBlockedModal()" class="btn-primary" style="width: 100%;">Okay, Got It</button>
+    </div>
+  </div>
 
   <script>
     // Set date restrictions for booking modals

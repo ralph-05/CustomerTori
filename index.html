@@ -31,29 +31,34 @@
     }
 
     .navbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0 5%;
-      height: 80px;
-      background: #543310;
-      border-bottom: none;
-      position: sticky;
-      top: 0;
-      width: 100%;
-      z-index: 1000;
-      box-sizing: border-box;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      display: flex !important;
+      justify-content: space-between !important;
+      align-items: center !important;
+      padding: 0 5% !important;
+      height: 80px !important;
+      background: #543310 !important;
+      border-bottom: none !important;
+      position: sticky !important;
+      top: 0 !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      z-index: 1000 !important;
+      box-sizing: border-box !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
       margin-bottom: 0 !important; /* Override global-styles.css margin-bottom */
+      margin: 0 !important;
+      gap: 0 !important;
+      flex-wrap: nowrap !important;
     }
 
     .nav-container {
-      max-width: 1400px;
-      width: 100%;
-      margin: 0 auto;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+      max-width: 100% !important;
+      width: 100% !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      display: flex !important;
+      justify-content: space-between !important;
+      align-items: center !important;
     }
 
     .nav-left-content {
@@ -165,12 +170,16 @@
       display: none;
       position: absolute;
       top: 25px;
-      right: 25px;
-      background: none;
-      border: none;
+      right: 0px;
+      background: none !important;
+      border: none !important;
+      box-shadow: none !important;
+      padding: 0 10px 0 0 !important;
+      margin: 0 !important;
       color: white;
       font-size: 28px;
       cursor: pointer;
+      z-index: 2001;
     }
 
     /* Remove the design class as it's now in global body */
@@ -1196,11 +1205,11 @@
       margin-top: 30px;
       border-radius: 25px;
       display: flex;
+      flex-direction: column;
       align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
       gap: 25px;
       box-shadow: 0 12px 30px rgba(0,0,0,0.2);
+      text-align: center;
     }
 
     .banner-left { display: flex; align-items: center; gap: 25px; }
@@ -1337,32 +1346,49 @@
     @media (max-width: 768px) {
       .desktop-only-signin { display: none !important; }
       .navbar { 
-        padding: 15px 20px; 
-        justify-content: space-between; 
-        background: #543310;
-        position: fixed;
-        height: 70px;
+        padding: 15px 0px 15px 10px !important; 
+        justify-content: space-between !important; 
+        background: #543310 !important;
+        position: fixed !important;
+        height: 70px !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
       }
-      .nav-left-content { gap: 0; }
+      .nav-container {
+        max-width: 100% !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: flex !important;
+        justify-content: space-between !important;
+      }
+      .nav-left-content { gap: 0 !important; }
       .nav-logo img { height: 45px; width: 45px; }
       
       .nav-right-mobile-group {
-        display: flex;
-        align-items: center;
-        gap: 8px; /* Closer buttons */
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important; /* Closer buttons */
+        position: absolute !important;
+        right: 0px !important;
+        top: 50% !important;
+        transform: translateY(-50%) !important;
+        padding: 0 !important;
       }
 
       .mobile-menu-btn { 
-        display: block; 
+        display: block !important; 
         background: transparent !important;
-        border: none;
-        padding: 0;
-        margin: 0;
-        box-shadow: none;
+        border: none !important;
+        padding: 0px !important;
+        margin: 0 !important;
+        box-shadow: none !important;
         color: #fff !important; /* White icon only */
-        font-size: 24px;
-        cursor: pointer;
-        order: 2; /* Burger to the rightmost */
+        font-size: 24px !important;
+        cursor: pointer !important;
       }
 
       .btn-signin-mobile {
@@ -1384,13 +1410,13 @@
         top: 0;
         right: 0;
         height: 100vh;
-        width: 280px;
+        width: 250px;
         background: rgba(84, 51, 16, 0.98);
         flex-direction: column;
         justify-content: center;
         align-items: center;
         gap: 20px;
-        padding: 60px 30px;
+        padding: 50px 0px 50px 25px;
         box-shadow: -10px 0 30px rgba(0,0,0,0.5);
         z-index: 2000;
         backdrop-filter: blur(15px);
@@ -1398,7 +1424,21 @@
         border-left: 1px solid rgba(255,255,255,0.1);
       }
       .nav-links.active { display: flex; animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-      .mobile-menu-close { display: block; top: 20px; right: 20px; }
+      .mobile-menu-close { 
+        display: block !important; 
+        position: absolute !important;
+        top: 20px !important; 
+        right: 0px !important; 
+        padding: 0px !important;
+        margin: 0 !important;
+        z-index: 2000 !important;
+        background: none !important;
+        border: none !important;
+        box-shadow: none !important;
+        color: white !important;
+        font-size: 28px !important;
+        cursor: pointer !important;
+      }
       @keyframes slideIn {
         from { transform: translateX(100%); opacity: 0; }
         to { transform: translateX(0); opacity: 1; }
@@ -1798,9 +1838,7 @@
             <canvas id="wheelCanvas" width="1000" height="1000"></canvas>
           </div>
           <div class="result-badge" id="winnerBox">
-            <span style="font-size: 35px;">✨</span>
             <span id="winnerText">Ready to Spin!</span>
-            <span style="font-size: 35px;">✨</span>
           </div>
         </div>
       </div>
@@ -1928,13 +1966,8 @@
       
       // Close mobile menu if open
       const navLinks = document.getElementById('navLinks');
-      const menuBtn = document.querySelector('.mobile-menu-btn i');
       if (navLinks.classList.contains('active')) {
         navLinks.classList.remove('active');
-        if (menuBtn) {
-          menuBtn.classList.remove('fa-times');
-          menuBtn.classList.add('fa-bars');
-        }
       }
       
       window.scrollTo(0, 0);
@@ -1942,16 +1975,7 @@
 
     function toggleMobileMenu() {
       const navLinks = document.getElementById('navLinks');
-      const menuBtn = document.querySelector('.mobile-menu-btn i');
       navLinks.classList.toggle('active');
-      
-      if (navLinks.classList.contains('active')) {
-        menuBtn.classList.remove('fa-bars');
-        menuBtn.classList.add('fa-times');
-      } else {
-        menuBtn.classList.remove('fa-times');
-        menuBtn.classList.add('fa-bars');
-      }
     }
 
     async function loadData() {
@@ -2102,7 +2126,7 @@
         btn.className = 'modal-size-btn' + (idx === 0 ? ' active' : '');
         btn.innerHTML = `
           <span class="size-name">${s.size}</span>
-          <span class="size-price">₱${s.product_price}</span>
+          <span class="size-price">₱${Number(s.price || s.product_price || 0).toFixed(2)}</span>
         `;
         btn.onclick = () => {
           document.querySelectorAll('.modal-size-btn').forEach(b => b.classList.remove('active'));

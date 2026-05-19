@@ -11,6 +11,7 @@ const CUSTOMER_NOTICE_KEY = "customer_notice_last_seen"
 let lastNoticeSeen = Number(localStorage.getItem(CUSTOMER_NOTICE_KEY) || 0)
 let currentInsufficientCount = 0
 const seenPaymentConfirmations = new Set()
+const seenPickupNotifications = new Set()
 let customerNotifications = []
 let customerNotificationPoller = null
 let notificationFeatureEnabled = false
@@ -20,6 +21,25 @@ let lastBellCount = 0
 let isInitialBellLoad = true
 let trackPollInterval = null
 let wheelIsLoading = false
+
+// Kiosk time check functions
+function openKioskBlockedModal() {
+  const modal = document.getElementById('kioskBlockedModal');
+  if (modal) {
+    modal.style.display = 'flex';
+  }
+}
+
+function closeKioskBlockedModal() {
+  const modal = document.getElementById('kioskBlockedModal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+}
+
+function checkKioskOrderingAllowed() {
+  return typeof window.isKioskOrderingAllowed === 'function' ? window.isKioskOrderingAllowed() : true;
+}
 
 // Real-time Promos Subscription
 let promosUnsub = null
@@ -221,6 +241,23 @@ function subscribeToTrackOrderRealtime() {
                 
                 if (matchesEmail || matchesContact) {
                     console.log("[System Log] Real-time booking update received")
+                    runTrackOrder().catch(console.error)
+                }
+            }
+        })
+        .on('postgres_changes', { 
+            event: '*', 
+            schema: 'public', 
+            table: 'orders' 
+        }, (payload) => {
+            const order = payload.new
+            if (order) {
+                const orderCustId = String(order.customer_id || "").toLowerCase()
+                const matchesEmail = email && orderCustId.includes(email.toLowerCase())
+                const matchesContact = contact && orderCustId.includes(contact.toLowerCase())
+                
+                if (matchesEmail || matchesContact) {
+                    console.log("[System Log] Real-time orders table update received")
                     runTrackOrder().catch(console.error)
                 }
             }
@@ -606,6 +643,9 @@ async function fetchInsufficientOrdersForNotifications() {
     const { data: pending } = await q1
     const pendingList = Array.isArray(pending) ? pending : []
     pendingList.forEach((o) => {
+      // Only show insufficient notification for kiosk/preorder
+      if (!['kiosk', 'preorder'].includes(o.type)) return
+      
       const notesText = String(o.insufficient_notes || o.notes || "")
       const remaining = Number(o.insufficient_amount_needed || 0) || parseRemainingFromNotes(notesText)
       const hasMarker = o.insufficient_payment === true || remaining > 0 || /insufficient/i.test(notesText)
@@ -630,6 +670,9 @@ async function fetchInsufficientOrdersForNotifications() {
     const { data: bookings } = await q2
     const bookingList = Array.isArray(bookings) ? bookings : []
     bookingList.forEach((o) => {
+      // Only show insufficient notification for preorder
+      if (o.type !== 'preorder') return
+      
       const notesText = String(o.insufficient_notes || o.notes || "")
       const remaining = Number(o.insufficient_amount_needed || 0) || parseRemainingFromNotes(notesText)
       const hasMarker = o.insufficient_payment === true || remaining > 0 || /insufficient/i.test(notesText)
@@ -641,6 +684,62 @@ async function fetchInsufficientOrdersForNotifications() {
         remaining_amount: remaining,
         status: "unread",
         message: "Additional payment required. Tap to complete payment.",
+        created_at: o.updated_at || o.created_at || o.timestamp || new Date().toISOString()
+      })
+    })
+  } catch (_) {}
+
+  return results
+}
+
+async function fetchPickupNotifications() {
+  if (!currentCustomer || !db || isGuest) return []
+  const results = []
+  try {
+    let q1 = db.from("pending_orders")
+      .select("*")
+      .neq("type", "redemption")
+      .in("status", ["ready", "for_pickup", "for pickup"])
+    q1 = buildCustomerIdentityFilter(q1)
+    const { data: pending } = await q1
+    const pendingList = Array.isArray(pending) ? pending : []
+    pendingList.forEach((o) => {
+      const key = `pending-${o.id}`
+      if (seenPickupNotifications.has(key)) return
+      seenPickupNotifications.add(key)
+      results.push({
+        id: `pickup-pending-${o.id}`,
+        order_id: o.id,
+        source_table: "pending_orders",
+        remaining_amount: 0,
+        status: "unread",
+        message: "Your order is ready for pickup!",
+        type: "pickup",
+        created_at: o.updated_at || o.created_at || o.timestamp || new Date().toISOString()
+      })
+    })
+  } catch (_) {}
+
+  try {
+    let q2 = db.from("bookings")
+      .select("*")
+      .in("status", ["ready", "for_pickup", "for pickup"])
+    q2 = buildCustomerIdentityFilter(q2)
+    const { data: bookings } = await q2
+    const bookingList = Array.isArray(bookings) ? bookings : []
+    bookingList.forEach((o) => {
+      if (o.type !== 'preorder') return
+      const key = `booking-${o.id}`
+      if (seenPickupNotifications.has(key)) return
+      seenPickupNotifications.add(key)
+      results.push({
+        id: `pickup-booking-${o.id}`,
+        order_id: o.id,
+        source_table: "bookings",
+        remaining_amount: 0,
+        status: "unread",
+        message: "Your pre-order is ready for pickup!",
+        type: "pickup",
         created_at: o.updated_at || o.created_at || o.timestamp || new Date().toISOString()
       })
     })
@@ -696,6 +795,7 @@ function renderCustomerNotifications(list) {
     const status = String(n.status || "unread").toLowerCase()
     const isFallback = String(n.id || "").startsWith("fallback-")
     const message = String(n.message || "").toLowerCase()
+    const isPickup = n.type === "pickup"
     
     // Improved detection logic
     const isPaymentConfirmed = status === "paid" || (remaining === 0 && message.includes("fully paid"))
@@ -706,14 +806,17 @@ function renderCustomerNotifications(list) {
     item.className = `notification-item ${status}`
     item.onclick = () => handleNotificationClick(n.id)
     
-    if (isPaymentConfirmed) {
+    if (isPickup) {
       item.innerHTML = `
-        <div class="notification-title" style="color: #2e7d32;">Payment Confirmed</div>
+        <div class="notification-title" style="color: #2e7d32;">Ready for Pickup</div>
         <div class="notification-meta">Order #${n.order_id || "--"}</div>
-        <div class="notification-meta">Your remaining balance has been settled at the counter. Thank you!</div>
-        <div style="margin-top: 10px; font-size: 0.85em; color: #2e7d32; font-weight: 700;">
-          Order is now fully paid.
-        </div>
+      `
+      item.style.borderLeft = "5px solid #4CAF50"
+      item.style.background = "#e8f5e9"
+    } else if (isPaymentConfirmed) {
+      item.innerHTML = `
+        <div class="notification-title" style="color: #2e7d32;">Payment Completed</div>
+        <div class="notification-meta">Order #${n.order_id || "--"}</div>
       `
       item.style.borderLeft = "5px solid #2e7d32"
       item.style.background = "#e8f5e9"
@@ -721,10 +824,6 @@ function renderCustomerNotifications(list) {
       item.innerHTML = `
         <div class="notification-title" style="color: #2e7d32;">Order Confirmed</div>
         <div class="notification-meta">Order #${n.order_id || "--"}</div>
-        <div class="notification-meta">${n.message}</div>
-        <div style="margin-top: 10px; font-size: 0.85em; color: #2e7d32; font-weight: 700;">
-          Your order is now being prepared.
-        </div>
       `
       item.style.borderLeft = "5px solid #2e7d32"
       item.style.background = "#e8f5e9"
@@ -732,21 +831,13 @@ function renderCustomerNotifications(list) {
       item.innerHTML = `
         <div class="notification-title" style="color: #d32f2f;">Order Rejected</div>
         <div class="notification-meta">Order #${n.order_id || "--"}</div>
-        <div class="notification-meta">${n.message}</div>
-        <div style="margin-top: 10px; font-size: 0.85em; color: #d32f2f; font-weight: 700;">
-          Please contact support or try again.
-        </div>
       `
       item.style.borderLeft = "5px solid #d32f2f"
       item.style.background = "#ffebee"
     } else {
       item.innerHTML = `
-        <div class="notification-title">Additional Payment Required</div>
-        <div class="notification-meta">Order #${n.order_id || "--"} - Remaining Balance: \u20B1 ${remaining.toFixed(2)}</div>
-        <div class="notification-meta">${n.message || "Please pay the remaining balance upon pickup."}${isFallback ? " (synced from order)" : ""}</div>
-        <div style="margin-top: 10px; font-size: 0.85em; color: var(--coffee-medium); font-style: italic;">
-          Please settle the remaining balance at the counter during pickup.
-        </div>
+        <div class="notification-title">Complete Payment</div>
+        <div class="notification-meta">Order #${n.order_id || "--"} - Remaining: \u20B1${remaining.toFixed(2)}</div>
       `
     }
     container.appendChild(item)
@@ -817,6 +908,18 @@ async function fetchCustomerNotifications({ autoOpen = false } = {}) {
         if (!existingKeys.has(key)) customerNotifications.push(f)
       })
     }
+    
+    const pickup = await fetchPickupNotifications()
+    if (pickup.length) {
+      const existingKeys = new Set(customerNotifications.map((n) => `${n.source_table}:${n.order_id}`))
+      pickup.forEach((f) => {
+        const key = `${f.source_table}:${f.order_id}`
+        if (!existingKeys.has(key)) customerNotifications.push(f)
+      })
+    }
+    
+    // Sort notifications: latest first
+    customerNotifications.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
     
     // Unread logic: Only count notifications that are truly 'unread'
     // 'paid' notifications are considered seen once the payment is settled.
@@ -1625,6 +1728,11 @@ function showPage(page) {
   if (customerBell) {
     // Bell is always visible for notifications
     customerBell.style.display = "flex"
+  }
+
+  // Set Processing tab as active when opening track page
+  if (page === "track") {
+    switchTrackTab("processing")
   }
 
   // Handle Preorder Drawer Button Visibility
@@ -2945,25 +3053,54 @@ function generateLoyaltyCard(skipFetch = false) {
 }
 
 let selectedRedeemDrink = null
+let currentRedeemFilter = "All"
 
 function openRedeemModal() {
     const modal = document.getElementById("redeemModal")
     if (modal) modal.style.display = "flex"
-    loadRedeemDrinks()
+    selectedRedeemDrink = null
+    currentRedeemFilter = "All"
+    const selectedOrderDiv = document.getElementById("selectedRedeemOrder")
+    if (selectedOrderDiv) selectedOrderDiv.style.display = "none"
+    const btn = document.getElementById("confirmRedeemBtn")
+    if (btn) btn.disabled = true
+    // Reset filter buttons
+    const filterBtns = document.querySelectorAll("#redeemCategories button")
+    filterBtns.forEach(b => {
+        b.classList.remove("active")
+        b.style.background = "rgba(255,255,255,0.1)"
+        b.style.color = "#333"
+        b.style.borderColor = "#ddd"
+    })
+    if (filterBtns[0]) {
+        filterBtns[0].classList.add("active")
+        filterBtns[0].style.background = "var(--accent-warm)"
+        filterBtns[0].style.color = "white"
+        filterBtns[0].style.borderColor = "var(--accent-warm)"
+    }
+    loadRedeemDrinks(currentRedeemFilter)
 }
 
 function closeRedeemModal() {
     const modal = document.getElementById("redeemModal")
     if (modal) modal.style.display = "none"
+    selectedRedeemDrink = null
+    const selectedOrderDiv = document.getElementById("selectedRedeemOrder")
+    if (selectedOrderDiv) selectedOrderDiv.style.display = "none"
+    const btn = document.getElementById("confirmRedeemBtn")
+    if (btn) btn.disabled = true
 }
 
-function loadRedeemDrinks() {
+function loadRedeemDrinks(filter = "All") {
     const list = document.getElementById("redeemDrinkList")
     if (!list) return
     list.innerHTML = ""
 
     // Filter groupedProducts for Coffee, Non-coffee, Frappe, and Soda categories
-    const drinkCats = ["Coffee", "Non-coffee", "Frappe", "Soda"]
+    let drinkCats = ["Coffee", "Non-coffee", "Frappe", "Soda"]
+    if (filter !== "All") {
+        drinkCats = [filter]
+    }
     
     drinkCats.forEach(cat => {
         if (!groupedProducts[cat]) return
@@ -2995,6 +3132,23 @@ function loadRedeemDrinks() {
     })
 }
 
+function filterRedeemCategory(category, btnEl) {
+    currentRedeemFilter = category
+    // Update filter buttons style
+    const filterBtns = document.querySelectorAll("#redeemCategories button")
+    filterBtns.forEach(b => {
+        b.classList.remove("active")
+        b.style.background = "rgba(255,255,255,0.1)"
+        b.style.color = "#333"
+        b.style.borderColor = "#ddd"
+    })
+    btnEl.classList.add("active")
+    btnEl.style.background = "var(--accent-warm)"
+    btnEl.style.color = "white"
+    btnEl.style.borderColor = "var(--accent-warm)"
+    loadRedeemDrinks(category)
+}
+
 function selectRedeemDrink(variant, name, cardEl) {
     selectedRedeemDrink = { ...variant, product_name: name }
     
@@ -3005,6 +3159,21 @@ function selectRedeemDrink(variant, name, cardEl) {
     })
     cardEl.style.borderColor = "var(--accent-warm)"
     cardEl.style.backgroundColor = "rgba(212, 165, 116, 0.1)"
+    
+    // Show selected order
+    const selectedOrderDiv = document.getElementById("selectedRedeemOrder")
+    const selectedRedeemImg = document.getElementById("selectedRedeemImg")
+    const selectedRedeemName = document.getElementById("selectedRedeemName")
+    const selectedRedeemSize = document.getElementById("selectedRedeemSize")
+    
+    if (selectedOrderDiv) selectedOrderDiv.style.display = "block"
+    if (selectedRedeemImg) {
+        selectedRedeemImg.src = variant.image_url || variant.photo || ""
+        selectedRedeemImg.onerror = () => { selectedRedeemImg.style.display = 'none' }
+        selectedRedeemImg.style.display = 'block'
+    }
+    if (selectedRedeemName) selectedRedeemName.textContent = name
+    if (selectedRedeemSize) selectedRedeemSize.textContent = variant.size
     
     // Enable submit button
     const btn = document.getElementById("confirmRedeemBtn")
@@ -3048,7 +3217,15 @@ function submitRedemption() {
   .then(({ data: doc, error }) => {
     if (error) throw error
     const docId = doc.id
-    showMessage("Redemption request sent! Please wait for confirmation.", "info", "redeemMessage")
+    
+    // Show success dialog box
+    closeRedeemModal()
+    const modal = document.getElementById("orderConfirmedModal")
+    const text = document.getElementById("orderConfirmedText")
+    if (text) {
+      text.innerHTML = "Your redemption request has been submitted successfully!<br>Please wait for cashier confirmation."
+    }
+    if (modal) modal.style.display = "flex"
     
     // Update main redeem button state
     const mainBtn = document.getElementById("redeemBtn")
@@ -3056,10 +3233,6 @@ function submitRedemption() {
         mainBtn.disabled = true
         mainBtn.textContent = "Waiting for confirmation..."
     }
-
-    setTimeout(() => {
-        closeRedeemModal()
-    }, 2000)
     
     // Listen for status changes
     const channel = db.channel('redemption-updates-' + docId)
@@ -3567,6 +3740,11 @@ function setModalTemp(temp) {
 function handleModalAdd() {
   if (!selectedModalSize || selectedModalSize.is_available === false) return
   
+  if (!checkKioskOrderingAllowed()) {
+    openKioskBlockedModal();
+    return;
+  }
+  
   const price = Number(selectedModalSize.price || selectedModalSize.product_price || 0)
   const photo = selectedModalSize.image_url || currentModalItem.sizes[0].image_url || ""
   const temperature = currentModalItem.catName === "Coffee" ? selectedModalTemp : null
@@ -3744,7 +3922,12 @@ function openPaymentModal() {
     console.log("[v0] openPaymentModal triggered");
     try {
         const msg = document.getElementById("custOrderMsg")
-        
+
+        if (!checkKioskOrderingAllowed()) {
+            openKioskBlockedModal();
+            return;
+        }
+
         // Check if cart has items
         if (!kioskOrder || !kioskOrder.length) {
             console.warn("[v0] kioskOrder empty or length is 0", kioskOrder);
@@ -3846,6 +4029,12 @@ window.togglePreorderPayment = () => {
 window.confirmPaymentAndOrder = async () => {
     const msg = document.getElementById("paymentMessage")
     if (msg) msg.textContent = ""
+
+    if (!checkKioskOrderingAllowed()) {
+        window.closePaymentModal();
+        openKioskBlockedModal();
+        return;
+    }
     
     showMessage("Order in Process...", "info", "paymentMessage")
 
@@ -4286,10 +4475,35 @@ async function placeKioskOrder(paymentDetails = {}) {
   }
 }
 
+function switchTrackTab(tabName) {
+  // Hide all sections
+  const sections = ['bookings', 'processing', 'toprepare', 'topickup', 'completed']
+  sections.forEach(section => {
+    const el = document.getElementById('track-' + section)
+    if (el) el.style.display = 'none'
+  })
+  
+  // Show selected section
+  const selectedSection = document.getElementById('track-' + tabName)
+  if (selectedSection) selectedSection.style.display = 'block'
+  
+  // Update tab styles
+  const tabs = document.querySelectorAll('.track-tab')
+  tabs.forEach(tab => {
+    if (tab.getAttribute('data-tab') === tabName) {
+      tab.classList.add('active')
+    } else {
+      tab.classList.remove('active')
+    }
+  })
+}
+
 async function runTrackOrder() {
-  const orderBody = document.getElementById("trackBody")
-  const historyBody = document.getElementById("historyBody")
-  const bookingBody = document.getElementById("bookingBody")
+  const trackBookingsBody = document.getElementById("trackBookingsBody")
+  const trackProcessingBody = document.getElementById("trackProcessingBody")
+  const trackToPrepareBody = document.getElementById("trackToPrepareBody")
+  const trackToPickupBody = document.getElementById("trackToPickupBody")
+  const trackCompletedBody = document.getElementById("trackCompletedBody")
   const syncStatus = document.getElementById("trackSyncStatus")
   
   if (!currentCustomer) return
@@ -4344,30 +4558,32 @@ async function runTrackOrder() {
     return query
   }
 
-  let activeOrders = []
+  let allOrders = []
   let historyOrdersData = []
   let bookingsData = []
-  let rescheduleLogs = []
   let allPendingOrders = []
 
   try {
-      // 1. Fetch pending orders
+      console.log("[DEBUG] Starting runTrackOrder with customer:", currentCustomer)
+      // 1. Fetch pending orders with customer filter
       let pendingQuery = db.from("pending_orders").select("*").neq("type", "redemption")
       pendingQuery = buildIdentityFilter(pendingQuery)
       const { data: pData, error: pError } = await pendingQuery
       
       if (pError) throw pError
       allPendingOrders = pData || []
+      console.log("[DEBUG] allPendingOrders (with filter):", allPendingOrders)
 
-      // 2. Fetch history orders
+      // 2. Fetch history orders with customer filter
       let historyQuery = db.from("orders").select("*")
       historyQuery = buildIdentityFilter(historyQuery)
       const { data: hData, error: hError } = await historyQuery
       
       if (hError) throw hError
       historyOrdersData = (hData || []).filter(it => it.is_redemption !== true)
+      console.log("[DEBUG] historyOrdersData (with filter):", historyOrdersData)
 
-      // 3. Fetch bookings FIRST (so we can use it for activeOrders)
+      // 3. Fetch bookings with customer filter
       let bookingsQuery = db.from("bookings").select("*")
       bookingsQuery = buildIdentityFilter(bookingsQuery)
       const { data: bData, error: bError } = await bookingsQuery
@@ -4375,9 +4591,13 @@ async function runTrackOrder() {
       if (bError) throw bError
       bookingsData = bData || []
       const allBookings = (bookingsData || []).map(doc => ({ ...doc }))
+      console.log("[DEBUG] allBookings (with filter):", allBookings)
 
-      activeOrders = [
+      allOrders = [
         ...allPendingOrders.filter(o => 
+            o.status !== 'completed' && o.status !== 'rejected' && o.status !== 'cancelled'
+        ),
+        ...historyOrdersData.filter(o => 
             o.status !== 'completed' && o.status !== 'rejected' && o.status !== 'cancelled'
         ),
         ...allBookings.filter(b => 
@@ -4385,13 +4605,7 @@ async function runTrackOrder() {
             b.status !== 'completed' && b.status !== 'rejected' && b.status !== 'cancelled'
         )
       ]
-
-      // 4. Fetch reschedule logs if needed
-      if (bookingsData.length > 0) {
-          const bookingIds = bookingsData.map(b => b.id)
-          const { data: logs, error: logErr } = await db.from("booking_reschedule_logs").select("*").in("booking_id", bookingIds)
-          if (!logErr) rescheduleLogs = logs || []
-      }
+      console.log("[DEBUG] allOrders:", allOrders)
 
       // Process and Render
       const historyGroups = {}
@@ -4458,36 +4672,38 @@ async function runTrackOrder() {
           }
       })
 
-      // Final sorting
-      activeOrders.sort((a, b) => new Date(b.created_at || b.timestamp || 0) - new Date(a.created_at || a.timestamp || 0))
+      // Final sorting - latest first
+      allOrders.sort((a, b) => new Date(b.created_at || b.timestamp || 0) - new Date(a.created_at || a.timestamp || 0))
       
       const historyOrders = Object.values(historyGroups)
-        .filter(hOrder => !activeOrders.some(aOrder => Math.abs(new Date(hOrder.timestamp).getTime() - new Date(aOrder.created_at || aOrder.timestamp).getTime()) < 2000))
+        .filter(hOrder => !allOrders.some(aOrder => Math.abs(new Date(hOrder.timestamp).getTime() - new Date(aOrder.created_at || aOrder.timestamp).getTime()) < 2000))
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 
       const mapOrderStatus = (status, currentlyPreparing, isPaid, hasInsufficientMarker, paidMarker) => {
         const s = String(status || "").toLowerCase()
-        if (['completed', 'complete', 'done'].includes(s)) return "Complete"
-        if (['ready', 'for_pickup', 'for pickup'].includes(s)) return "For Pickup"
-        if (currentlyPreparing || s === 'preparing' || s === 'accepted' || paidMarker) return "Preparing"
-        if (hasInsufficientMarker) return "Preparing"
-        if (s === 'pending' || isPaid) return "In Process"
+        if (['completed', 'complete', 'done'].includes(s)) return "Completed"
+        if (['ready', 'for_pickup', 'for pickup', 'to_pickup'].includes(s)) return "To Pick Up"
+        if (['to_prepare', 'preparing', 'accepted'].includes(s)) return "To Prepare"
+        if (['processing'].includes(s)) return "Processing"
+        if (hasInsufficientMarker) return "Waiting to Complete Payment"
+        if (s === 'pending' || isPaid) return "Processing"
         if (s === 'rejected') return "Rejected"
         if (s === 'cancelled') return "Cancelled"
-        return "In Process"
+        return "Processing"
       }
 
       const getBadgeStyle = (displayStatus) => {
-        if (displayStatus === "In Process") return "background:#fff3e0;color:#e65100;font-weight:700;"
-        if (displayStatus === "Preparing") return "background:#f3e5f5;color:#7b1fa2;font-weight:700;"
-        if (displayStatus === "For Pickup") return "background:#4CAF50;color:white;font-weight:700;"
-        if (displayStatus === "Complete") return "background:#9E9E9E;color:white;"
+        if (displayStatus === "Processing") return "background:#fff3e0;color:#e65100;font-weight:700;"
+        if (displayStatus === "To Prepare") return "background:#f3e5f5;color:#7b1fa2;font-weight:700;"
+        if (displayStatus === "To Pick Up") return "background:#4CAF50;color:white;font-weight:700;"
+        if (displayStatus === "Completed") return "background:#9E9E9E;color:white;"
         if (displayStatus === "Rejected") return "background:#f44336;color:white;"
         if (displayStatus === "Cancelled") return "background:#757575;color:white;"
+        if (displayStatus === "Waiting to Complete Payment") return "background:#ff9800;color:white;font-weight:700;"
         return "background:#fff3e0;color:#e65100;font-weight:700;"
       }
 
-      const renderOrderRow = (d, isHistory = false) => {
+      const renderOrderRow = (d, section = "processing") => {
             let items = d.items
             if (typeof items === 'string') try { items = JSON.parse(items) } catch(e) { items = [] }
             items = items || []
@@ -4504,114 +4720,118 @@ async function runTrackOrder() {
             const isPaid = d.paymentStatus === 'paid' || d.status === 'paid' || d.status === 'PAID'
             let displayStatus = mapOrderStatus(d.status, d.currently_preparing, isPaid, insuff.hasMarker, paidMarker)
             const badgeStyle = getBadgeStyle(displayStatus)
-            
-            // If payment is confirmed, show Preparing
-            if (paidMarker) {
-                displayStatus = "Preparing"
-            }
-            
-            let reasonDisplay = ""
-            if (String(d.status || "").toLowerCase() === 'rejected') {
-                reasonDisplay = d.rejection_reason || d.rejectionReason || d.insufficient_notes || d.notes || (items.find(i => i.rejection_reason)?.rejection_reason) || "No reason provided"
-            } else if (insuff.hasMarker && insuff.stillNeeded > 0) {
-                displayStatus = `Preparing, pay remaining amount: \u20B1${Number(insuff.stillNeeded).toFixed(2)}`
-            } else if (insuff.hasMarker && displayStatus === "Preparing") {
-                displayStatus = `Preparing`
-            } else if (displayStatus === "For Pickup") {
-                displayStatus = `Ready for pickup`
-            } else if (insuff.hasMarker) {
-                reasonDisplay = `\u26A0 Insufficient: Need \u20B1${Number(insuff.stillNeeded || d.total || 0).toFixed(2)}`
-            }
-            
-            let confirmationNotice = ""
-            const confirmedAt = parsePaymentConfirmedAt(d.insufficient_notes || d.notes || "")
-            if (confirmedAt) confirmationNotice = `<div style="margin-top: 6px; color: #2e7d32; font-weight: 700;">Payment confirmed: ${new Date(confirmedAt).toLocaleString()}</div>`
 
             let qtyContent = items.length === 0 ? "-" : items.map(i => `<div style="margin-bottom: 4px;">${i.quantity || i.qty || 1}x</div>`).join("")
             let productContent = items.length === 0 ? "No items" : items.map(i => `<div style="margin-bottom: 4px; font-weight: 600;">${i.name || i.product || "Item"}</div>`).join("")
 
             if (isPreorder) {
-              productContent += `<div style="font-weight:800;color:#d4a574;text-transform:uppercase;font-size:9px;letter-spacing:1px;margin-top:8px;">Pre-order Pickup</div>
-                                 <div style="font-size:11px;color:#888;margin-top:2px;"><i class="fa-regular fa-clock" style="margin-right:4px;"></i>${d.date || "N/A"} ${d.pickup_time || d.time || "N/A"}</div>`
+              productContent += `<div style="font-weight:800;color:#d4a574;text-transform:uppercase;font-size:9px;letter-spacing:1px;margin-top:8px;">Pre-order Pickup</div>`
             }
 
+            let typeLabel = "Walk-in"
+            if (d.type === 'preorder') typeLabel = "Pre-order"
+            if (d.type === 'kiosk') typeLabel = "Kiosk"
+
+            if (section === "processing") {
+              tr.innerHTML = `
+                <td style="vertical-align: top;"><span style="font-weight: 700;">${typeLabel}</span></td>
+                <td style="vertical-align: top;">${qtyContent}</td>
+                <td style="vertical-align: top;">${productContent}</td>
+                <td style="font-weight:800; color:var(--coffee-dark); font-size:16px; vertical-align: top;">\u20B1${Number(orderTotal).toFixed(2)}</td>
+                <td style="vertical-align: top;"><span class="badge" style="${badgeStyle}">${displayStatus}</span></td>
+                <td style="color:#888; font-size:13px; vertical-align: top;">${ts}</td>
+              `
+            } else if (section === "toprepare" || section === "topickup") {
+              tr.innerHTML = `
+                <td style="vertical-align: top;"><span style="font-weight: 700;">${typeLabel}</span></td>
+                <td style="vertical-align: top;">${qtyContent}</td>
+                <td style="vertical-align: top;">${productContent}</td>
+                <td style="color:#888; font-size:13px; vertical-align: top;">${ts}</td>
+              `
+            } else if (section === "completed") {
+              tr.innerHTML = `
+                <td style="vertical-align: top;"><span style="font-weight: 700;">${typeLabel}</span></td>
+                <td style="vertical-align: top;">${qtyContent}</td>
+                <td style="vertical-align: top;">${productContent}</td>
+                <td style="font-weight:800; color:var(--coffee-dark); font-size:16px; vertical-align: top;">\u20B1${Number(orderTotal).toFixed(2)}</td>
+                <td style="color:#888; font-size:13px; vertical-align: top;">${ts}</td>
+              `
+            }
+            return tr
+      }
+
+      const renderBookingRow = (d) => {
+            const tr = document.createElement("tr")
+            const ts = (d.created_at || d.timestamp) ? new Date(d.created_at || d.timestamp).toLocaleString() : ""
+            const time = d.type === "preorder" ? (d.pickup_time || d.time || "") : ((d.check_in_time && d.check_out_time) ? `${d.check_in_time} - ${d.check_out_time}` : (d.time || ""))
+            const insuffStatus = resolveInsufficientInfo(d)
+            let displayStatus = mapOrderStatus(d.status, d.currently_preparing, d.paymentStatus === 'paid', insuffStatus.hasMarker)
+            const badgeStyle = getBadgeStyle(displayStatus)
+            let typeLabel = d.type === "preorder" ? "Pre-order" : "Visit"
+
             tr.innerHTML = `
-              <td data-label="Qty" style="vertical-align: top;">${qtyContent}</td>
-              <td data-label="Product" style="vertical-align: top;">${productContent}</td>
-              <td data-label="Total" style="font-weight:800; color:var(--coffee-dark); font-size:16px; vertical-align: top;">\u20B1${Number(orderTotal).toFixed(2)}</td>
-              <td data-label="Status" style="vertical-align: top;"><span class="badge" style="${badgeStyle}">${displayStatus}</span>${confirmationNotice}</td>
-              <td data-label="Reason" style="font-size:13px; color:#666; vertical-align: top;">${reasonDisplay}</td>
-              <td data-label="${isHistory ? 'Date' : 'Placed At'}" style="color:#888; font-size:13px; vertical-align: top;">${ts}</td>
+              <td style="vertical-align: top;"><span style="font-weight: 700;">${typeLabel}</span></td>
+              <td style="vertical-align: top;">${d.date || ""}</td>
+              <td style="vertical-align: top;">${time}</td>
+              <td style="vertical-align: top;"><span class="badge" style="${badgeStyle}">${displayStatus}</span></td>
+              <td style="color:#888; font-size:13px; vertical-align: top;">${ts}</td>
             `
             return tr
       }
 
-      // Render Active Orders
-      if (orderBody) {
-        orderBody.innerHTML = activeOrders.length === 0 ? '<tr><td colspan="6" style="text-align:center">No active orders</td></tr>' : ""
-        activeOrders.forEach(d => orderBody.appendChild(renderOrderRow(d, false)))
+      // Separate orders into different sections with correct status mapping
+      const processingSection = allOrders.filter(o => o.type !== 'preorder' && String(mapOrderStatus(o.status, o.currently_preparing, o.paymentStatus === 'paid', resolveInsufficientInfo(o).hasMarker)).toLowerCase() === 'processing')
+      console.log("[DEBUG] processingSection:", processingSection)
+      const bookingsSection = activeBookingsSection
+      const toPrepareSection = allOrders.filter(o => String(mapOrderStatus(o.status, o.currently_preparing, o.paymentStatus === 'paid', resolveInsufficientInfo(o).hasMarker)).toLowerCase() === 'to prepare')
+      console.log("[DEBUG] toPrepareSection:", toPrepareSection)
+      const toPickupSection = allOrders.filter(o => String(mapOrderStatus(o.status, o.currently_preparing, o.paymentStatus === 'paid', resolveInsufficientInfo(o).hasMarker)).toLowerCase() === 'to pick up')
+      console.log("[DEBUG] toPickupSection:", toPickupSection)
+      const completedSectionOrders = allOrders.filter(o => String(mapOrderStatus(o.status, o.currently_preparing, o.paymentStatus === 'paid', resolveInsufficientInfo(o).hasMarker)).toLowerCase() === 'completed')
+      console.log("[DEBUG] completedSectionOrders:", completedSectionOrders)
+
+      // Render Bookings Section
+      if (trackBookingsBody) {
+        trackBookingsBody.innerHTML = bookingsSection.length === 0 ? '<tr><td colspan="5" style="text-align:center">No active bookings</td></tr>' : ""
+        bookingsSection.forEach(d => trackBookingsBody.appendChild(renderBookingRow(d)))
       }
 
-      // Render History
-      if (historyBody) {
-        historyBody.innerHTML = historyOrders.length === 0 ? '<tr><td colspan="6" style="text-align:center">No order history</td></tr>' : ""
-        historyOrders.forEach(d => historyBody.appendChild(renderOrderRow(d, true)))
+      // Render Processing Section
+      if (trackProcessingBody) {
+        trackProcessingBody.innerHTML = processingSection.length === 0 ? '<tr><td colspan="6" style="text-align:center">No processing orders</td></tr>' : ""
+        processingSection.forEach(d => trackProcessingBody.appendChild(renderOrderRow(d, "processing")))
       }
 
-      // Render Bookings
-      if (bookingBody) {
-        const combinedBookings = [...activeBookingsSection, ...bookingHistory]
-        bookingBody.innerHTML = combinedBookings.length === 0 ? '<tr><td colspan="8" style="text-align:center">No bookings found</td></tr>' : ""
-        combinedBookings.forEach((d) => {
-            const tr = document.createElement("tr")
-            const ts = (d.created_at || d.timestamp) ? new Date(d.created_at || d.timestamp).toLocaleString() : ""
-            const time = d.type === "preorder" ? (d.pickup_time || d.time || "") : ((d.check_in_time && d.check_out_time) ? `${d.check_in_time} - ${d.check_out_time}` : (d.time || ""))
-            
-            let items = d.items
-            if (typeof items === 'string') try { items = JSON.parse(items) } catch(e) { items = [] }
-            items = items || []
-            
-            let productContent = d.type === "preorder" ? items.map(i => `<div style="margin-bottom: 2px; font-weight: 600;">${i.name || i.product || "Item"}</div>`).join("") : "Table Booking"
-            let qtyContent = d.type === "preorder" ? items.map(i => `<div style="margin-bottom: 2px;">${i.quantity || i.qty || 1}x</div>`).join("") : "-"
-            
-            const log = rescheduleLogs.find(l => String(l.booking_id) === String(d.id))
-            let rescheduleNotice = (log || d.rescheduled) ? `<div style="margin-top: 8px; padding: 8px; background: #e3f2fd; border: 1px solid #bbdefb; border-left: 4px solid #2196f3; border-radius: 4px; color: #0d47a1; font-size: 0.85em;"><strong>Notice:</strong> Your booking has been rescheduled to <b>${log ? log.new_date : d.date}</b> at <b>${log ? log.new_time : time}</b></div>` : ""
-            
-            const insuffStatus = resolveInsufficientInfo(d)
-            let displayStatus = mapOrderStatus(d.status, d.currently_preparing, d.paymentStatus === 'paid', insuffStatus.hasMarker)
-            if (insuffStatus.hasMarker && insuffStatus.stillNeeded > 0) {
-                displayStatus = `Preparing, pay remaining amount: \u20B1${Number(insuffStatus.stillNeeded).toFixed(2)}`
-            } else if (insuffStatus.hasMarker && displayStatus === "Preparing") {
-                displayStatus = `Preparing`
-            } else if (displayStatus === "For Pickup") {
-                displayStatus = `Ready for pickup`
-            }
-            const badgeStyle = getBadgeStyle(displayStatus)
+      // Render To Prepare Section
+      if (trackToPrepareBody) {
+        trackToPrepareBody.innerHTML = toPrepareSection.length === 0 ? '<tr><td colspan="4" style="text-align:center">No orders to prepare</td></tr>' : ""
+        toPrepareSection.forEach(d => trackToPrepareBody.appendChild(renderOrderRow(d, "toprepare")))
+      }
 
-            tr.innerHTML = `
-              <td data-label="Qty">${qtyContent}</td>
-              <td data-label="Product">${productContent}</td>
-              <td data-label="Type">${d.type === "preorder" ? "Pre-order" : "Visit"}</td>
-              <td data-label="Date">${d.date || ""}</td>
-              <td data-label="Time">${time}</td>
-              <td data-label="Status"><span class="badge" style="${badgeStyle}">${displayStatus}</span>${rescheduleNotice}</td>
-              <td data-label="Reason">${d.status === "rejected" ? (d.rejection_reason || "No reason provided") : (insuffStatus.hasMarker ? `\u26A0 Insufficient: Need \u20B1${insuffStatus.stillNeeded.toFixed(2)}` : "")}</td>
-              <td data-label="Placed At">${ts}</td>
-            `
-            bookingBody.appendChild(tr)
-        })
+      // Render To Pick Up Section
+      if (trackToPickupBody) {
+        trackToPickupBody.innerHTML = toPickupSection.length === 0 ? '<tr><td colspan="4" style="text-align:center">No orders to pick up</td></tr>' : ""
+        toPickupSection.forEach(d => trackToPickupBody.appendChild(renderOrderRow(d, "topickup")))
+      }
+
+      // Render Completed Section
+      if (trackCompletedBody) {
+        trackCompletedBody.innerHTML = historyOrders.length === 0 ? '<tr><td colspan="5" style="text-align:center">No completed orders</td></tr>' : ""
+        historyOrders.forEach(d => trackCompletedBody.appendChild(renderOrderRow(d, "completed")))
       }
 
       // Update bell count
-      const insuffCount = [...activeOrders, ...activeBookingsSection].filter(o => resolveInsufficientInfo(o).hasMarker).length
+      const insuffCount = allOrders.filter(o => resolveInsufficientInfo(o).hasMarker).length
       updateCustomerBell(insuffCount)
 
   } catch (err) {
       console.error("Critical error in runTrackOrder:", err)
       const msg = `<tr><td colspan="8" style="text-align:center; color:red;">Error: ${err.message}</td></tr>`
-      if (orderBody) orderBody.innerHTML = msg
-      if (historyBody) historyBody.innerHTML = msg
-      if (bookingBody) bookingBody.innerHTML = msg
+      if (trackBookingsBody) trackBookingsBody.innerHTML = msg
+      if (trackProcessingBody) trackProcessingBody.innerHTML = msg
+      if (trackToPrepareBody) trackToPrepareBody.innerHTML = msg
+      if (trackToPickupBody) trackToPickupBody.innerHTML = msg
+      if (trackCompletedBody) trackCompletedBody.innerHTML = msg
   }
 }
 
@@ -5281,6 +5501,11 @@ window.updateWheel = () => {
 
 window.addWheelWinnerToCart = () => {
   if (!wheelWinner) return;
+
+  if (!checkKioskOrderingAllowed()) {
+    openKioskBlockedModal();
+    return;
+  }
 
   const p = wheelWinner;
   const photo = resolveWheelImage(p);

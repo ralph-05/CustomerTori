@@ -1172,6 +1172,66 @@ body {
   }
 }
 
+/* Tracking Tabs Styles */
+.track-tabs-container {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 30px;
+  flex-wrap: wrap;
+}
+
+.track-tab {
+  padding: 10px 20px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: white;
+  color: var(--coffee-dark);
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.track-tab:hover {
+  background: rgba(175, 143, 111, 0.1);
+}
+
+.track-tab.active {
+  background: var(--accent-warm);
+  color: white;
+  border-color: var(--accent-warm);
+}
+
+/* Additional Responsive Styles */
+@media (max-width: 768px) {
+  .track-title {
+    font-size: 36px !important;
+  }
+  
+  .track-tabs-container {
+    gap: 8px !important;
+  }
+  
+  .track-tab {
+    padding: 8px 12px !important;
+    font-size: 0.85rem !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .track-title {
+    font-size: 28px !important;
+  }
+  
+  .track-tabs-container {
+    gap: 6px !important;
+  }
+  
+  .track-tab {
+    padding: 6px 10px !important;
+    font-size: 0.75rem !important;
+  }
+}
+
 /* TYPOGRAPHY */
 h2 {
   font-family: var(--font-slab);
